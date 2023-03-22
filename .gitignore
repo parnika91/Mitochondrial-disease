@@ -13,3 +13,7 @@
 *.Tmp
 
 *.Rhistory
+
+figures.Rmd
+
+figures_all_libs_combined.Rmd
