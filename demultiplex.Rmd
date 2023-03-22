@@ -1,0 +1,207 @@
+---
+title: "Single cell RNA-seq of PBMCs from MITD - demultiplexing"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  toc: TRUE
+---
+
+<!-- ```{r, echo = F} -->
+<!-- # knitr::opts_chunk$set(warning = F, message = F) -->
+<!-- # knitr::opts_chunk$set(fig.pos = "!H", out.extra = "") -->
+<!-- #knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE) -->
+
+<!-- ``` -->
+
+<!-- ```{r load_libraries, echo = F, message = F, warning = F} -->
+<!-- library(Seurat) -->
+<!-- library(patchwork) -->
+<!-- library(readxl) -->
+<!-- library(tidyverse) -->
+<!-- library(ggplot2) -->
+<!-- library(ggpubr) -->
+<!-- library(reshape2) -->
+<!-- library(broom) -->
+<!-- library(stringr) -->
+<!-- # remotes::install_github('chris-mcginnis-ucsf/DoubletFinder') -->
+<!-- # library(DoubletFinder) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- load("malaria_monocyte_QC.RData") -->
+<!-- ``` -->
+
+# Step 2: Demultiplexing 
+
+<!-- a) match donor ID with samples (cells)  -->
+<!-- ```{r demultiplexing_vireo} -->
+
+<!-- # install / upgrade vireoSNP using pip install --upgrade --no-deps vireoSNP -->
+<!-- # vireo to check installation errors -->
+<!-- # download all cellSNP file from library -> save vcf file as .gz, leave others un-gzipped -->
+<!-- # error: index out of range -> solved by downloading the files again and redoing vireo -->
+<!-- # command line: vireo -c cellSNP_mat/ -N 5 -o vireo_result/ -->
+
+<!-- # add vireo output to meta data -->
+<!-- mono.demul <- mono -->
+<!-- snp <- read.delim(paste("../counts/",lib_name,"/vireo_result/donor_ids.tsv", sep = "")) -->
+<!-- meta <- mono.demul@meta.data %>%  -->
+<!--   tibble::rownames_to_column("cell") %>%  -->
+<!--   left_join(snp) -->
+
+<!-- table(meta$donor_id) -->
+<!-- # remove doublets and unassigned -->
+<!-- mono.demul@meta.data <- meta -->
+
+<!-- Idents(mono.demul) <- "donor_id" -->
+<!-- mono.singlet.donor <- mono.demul@meta.data %>%  -->
+<!--   as.data.frame() %>%  -->
+<!--   tibble::column_to_rownames("cell") -->
+
+<!-- mono.demul@meta.data <- mono.singlet.donor -->
+
+<!-- mono.singlet.donor <- subset(x = mono.demul, idents = c("doublet", "unassigned"), invert = T) -->
+
+<!-- # identical(meta$cell, rownames(mono@meta.data)) -->
+<!-- # [1] TRUE -->
+<!-- ``` -->
+
+b) Demultiplexing with hastag oligos -> identify cells with tagged barcodes (# of barcodes (Ab) = # of donors)
+```{r Demultiplexing_HTO}
+#Cell Hashing uses oligo-tagged antibodies against ubuquitously expressed surface proteins to place a “sample barcode” on each single cell, enabling different samples to be multiplexed together and run in a single experiment.
+
+# Select cell barcodes detected by both RNA and HTO In the example datasets we have already
+# filtered the cells for you, but perform this step for clarity.
+
+pbmc.singlet.donor <- pbmc
+joint.bcs <- intersect(rownames(pbmc.singlet.donor@meta.data), colnames(hto))
+
+# identical(colnames(pbmc@assays$RNA), rownames(pbmc@meta.data))
+# [1] TRUE
+
+# Subset RNA and HTO counts by joint cell barcodes
+#pbmc@assays$RNA <- pbmc@assays$RNA[, joint.bcs]
+pbmc.hto <- as.matrix(hto[,joint.bcs])
+
+## # Add HTO data as a new assay independent from RNA
+pbmc.singlet.donor[["HTO"]] <- CreateAssayObject(counts = pbmc.hto)
+
+# Normalize HTO data, here we use centered log-ratio (CLR) transformation
+pbmc.singlet.donor <- NormalizeData(pbmc.singlet.donor, assay = "HTO", normalization.method = "CLR")
+
+# If you have a very large dataset we suggest using k_function = 'clara'. This is a k-medoid
+# clustering function for large applications You can also play with additional parameters (see
+# documentation for HTODemux()) to adjust the threshold for classification Here we are using
+# the default settings
+pbmc.singlet.donor <- HTODemux(pbmc.singlet.donor, assay = "HTO", positive.quantile = 0.99)
+
+```
+
+
+```{r plots_dem}
+
+# Global classification results
+table(pbmc.singlet.donor$HTO_classification.global)
+
+Idents(pbmc.singlet.donor) <- "HTO_maxID"
+#RidgePlot(pbmc, assay = "HTO", features = rownames(pbmc[["HTO"]]), ncol = 3)
+
+Idents(pbmc.singlet.donor) <- "HTO_classification.global"
+VlnPlot(pbmc.singlet.donor, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size = 0.1, log = TRUE)
+
+pbmc.h <- pbmc.singlet.donor
+
+# First, we will remove negative cells from the object
+if(any(pbmc.h$HTO_classification.global == "Negative") == T)
+  pbmc.h <- subset(pbmc.h, idents = c("Negative"), invert = TRUE)
+
+# Calculate a tSNE embedding of the HTO data
+DefaultAssay(pbmc.h) <- "HTO"
+pbmc.h <- ScaleData(pbmc.h, features = rownames(pbmc.h),
+    verbose = FALSE)
+pbmc.h <- RunPCA(pbmc.h, features = rownames(pbmc.h), approx = FALSE)
+pbmc.h <- RunTSNE(pbmc.h, check_duplicates = F)
+Idents(pbmc.h) <- 'HTO_classification'
+DimPlot(pbmc.h)
+
+
+
+# To increase the efficiency of plotting, you can subsample cells using the num.cells argument
+#HTOHeatmap(pbmc, assay = "HTO", ncells = 500)
+```
+
+PCA on singlets
+```{r pbmc.singlet}
+# Extract singlets
+pbmc.singlet <- subset(pbmc.singlet.donor, idents = "Singlet")
+pbmc.singlet
+
+# Select the top 1000 most variable features
+pbmc.singlet <- FindVariableFeatures(pbmc.singlet)
+
+# Scaling RNA data, we only scale the variable features here for efficiency
+pbmc.singlet <- ScaleData(pbmc.singlet, features = VariableFeatures(pbmc.singlet))
+
+# Run PCA
+pbmc.singlet <- RunPCA(pbmc.singlet, features = VariableFeatures(pbmc.singlet))
+
+# We select the top 10 PCs for clustering and tSNE based on PCElbowPlot
+pbmc.singlet <- FindNeighbors(pbmc.singlet, reduction = "pca", dims = 1:10)
+pbmc.singlet <- FindClusters(pbmc.singlet, resolution = 0.6, verbose = FALSE)
+pbmc.singlet <- RunTSNE(pbmc.singlet, reduction = "pca", dims = 1:10, perplexity = 20)
+
+# Projecting singlet identities on TSNE visualization
+DimPlot(pbmc.singlet, group.by = "HTO_classification")
+
+```
+
+singlets, doublets, negatives
+```{r dem_QC}
+#pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+
+# Visualize QC metrics as a violin plot
+#VlnPlot(pbmc.singlet, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+ggplot(pbmc.singlet@meta.data, aes(x = nFeature_RNA)) +
+  geom_histogram(bins = 50, position = "identity")
+
+ggplot(pbmc.singlet@meta.data, aes(x = nCount_RNA)) +
+  geom_histogram(bins = 50, position = "identity")
+
+ggplot(pbmc.singlet@meta.data, aes(x = percent.mt)) +
+  geom_histogram(bins = 50, position = "identity")
+
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(pbmc.singlet, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc.singlet, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+pbmc.demul <- pbmc.singlet
+
+```
+
+```{r}
+# add pheno.data to meta.data based on hashtags
+
+# MITD1_l1
+donorid <- pheno.data %>% 
+  filter(Library_name == lib_name) %>% 
+  rename(HTO_classification = Antibody) %>% 
+  mutate(HTO_classification = gsub("_", "-", HTO_classification))
+
+pbmc.demul@meta.data <- pbmc.demul@meta.data %>% 
+  left_join(., donorid)
+
+rownames(pbmc.demul@meta.data) <- rownames(pbmc.singlet@meta.data)
+
+```
+
+
+
+```{r}
+#save.image("malaria_monocyte_demultiplex.RData")
+rm(pbmc.h, pbmc.singlet, pbmc.singlet.donor)
+```

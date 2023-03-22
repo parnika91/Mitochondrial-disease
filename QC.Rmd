@@ -1,0 +1,289 @@
+---
+title: "Single cell RNA-seq of PBMCs from MITD - quality control"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  toc: TRUE
+---
+
+```{r, echo = F}
+knitr::opts_chunk$set(warning = F, message = F)
+# knitr::opts_chunk$set(fig.pos = "!H", out.extra = "")
+#knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+
+```
+
+<!-- ```{r load_libraries, echo = F, message = F, warning = F} -->
+<!-- library(Seurat) -->
+<!-- library(patchwork) -->
+<!-- library(readxl) -->
+<!-- library(tidyverse) -->
+<!-- library(ggplot2) -->
+<!-- library(ggpubr) -->
+<!-- library(reshape2) -->
+<!-- library(broom) -->
+<!-- library(stringr) -->
+<!-- # remotes::install_github('chris-mcginnis-ucsf/DoubletFinder') -->
+<!-- # library(DoubletFinder) -->
+<!-- ``` -->
+
+# Step 1: Load filtered features, barcode, matrices and visualise quality
+
+
+```{r datadiscovery, echo = F}
+
+samplesheet <- read_excel("../a_2023_MITD_scRNAseq_nucleotide_sequencing.xlsx")
+colnames(samplesheet) <- samplesheet[1,]
+samplesheet <- samplesheet[-1,]
+#samplesheet <- samplesheet[,-1]
+colnames(samplesheet)[10] <- c("donor_lane")
+colnames(samplesheet)[ncol(samplesheet)] <- "Library_name"
+samplesheet <- samplesheet %>% 
+  select(which(!duplicated(names(.))))
+# colnames(samplesheet)[1] <- "Condition_name"
+# colnames(samplesheet)[15] <- "Protocol1"
+# colnames(samplesheet)[21] <- "Protocol2"
+# colnames(samplesheet)[35] <- "Protocol3"
+# colnames(samplesheet)[36] <- "Perform Date2"
+
+# table(samplesheet$`Multiplex Tag`, samplesheet$Library_name)
+# 
+# table(samplesheet$Condition_name, samplesheet$Library_name)
+# 
+libraries <- unique(samplesheet$Library_name)
+# 
+lib_name = "MITD1_l1"
+samplesheet %>% filter(Library_name == lib_name)
+
+# Antibody column needs to be changed from Total_Seq to TotalSeq
+samplesheet <- samplesheet %>% 
+  mutate(Antibody = gsub("Total_Seq", "TotalSeq", `Multiplex Oligo`))
+
+
+# add more metadata:
+
+donor_info <- read_excel("../EXP2_Johan.xlsx") %>% 
+  mutate(sample_index = str_sub(sample_id, 6, nchar(sample_id))) %>% 
+  relocate(sample_index) %>% 
+  rename(Name = sample_index)
+
+pheno.data <- samplesheet %>% 
+  left_join(., donor_info) %>% 
+  select(-c(Name, `External Links`, Organism, `Date Sample Collection`, `Collection Time`,
+            Protocol, Method, Origin, Material, Frozen, `Freezing Method`, `Dissociation Freetext`,
+            `Dissociation Method`, `Cell Count Loaded`, Performer, `Perform Date`, `Library Kit`,
+            `Multiplex Sample`, `Multiplex Sample`, `Sclib Freetext`, `Library Type`, Flowcell,
+            `Barcode Name`, lib_name, `Qc Cell Load Recovery`, Concentration_Ng_Ul, `Qc Tape Fragment Size Bp`)) %>% 
+  mutate(Group = case_when(
+    disease == "MELAS" ~ "mt-TL1",
+    disease == "HEALTHY" ~ "Healthy",
+    .default = disease
+  )) %>% 
+  distinct(Donorid, Library_name, .keep_all = T)
+
+```
+
+
+```{r hto_used}
+
+# lib name
+hto_used = samplesheet %>%
+    filter(Library_name == lib_name) %>%
+    pull(Antibody) %>%
+    unique
+#hto_used <- c("Total_Seq_A_6", "Total_Seq_A_9", "Total_Seq_A_7", "Total_Seq_A_8")
+# During integration, use excel file with tag and lib info to get the correct HTO
+```
+
+```{r load_libs}
+# Load the PBMC dataset
+data <- Read10X(data.dir = paste0("../counts/",lib_name,"/filtered_feature_bc_matrix/"))
+gex <- data[[1]]
+hto <- data[[2]][rownames(data[[2]]) %in% hto_used, ]
+
+# remove SCoV2 genes
+# plasmo.gex <- gex[grep(rownames(gex), pattern = "^gene-PF3D7_"),] # assay with Plasmodium genes
+#human.gex <- gex[grep(rownames(gex), pattern = "^gene-PF3D7_", invert = T),]
+
+# Initialize the Seurat object with the raw (non-normalized data).
+pbmc <- CreateSeuratObject(counts = gex, project = lib_name, min.cells = 3, min.features = 200)
+pbmc
+head(pbmc@meta.data, 5)
+
+```
+
+```{r MT}
+#grep("^MT-",rownames(mono@assays$RNA@counts),value = TRUE)
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+#head(mono$percent.mt)
+
+# add % of all MT genes
+
+mt.genes <- rownames(pbmc)[grep(rownames(pbmc), pattern = "^MT-")]
+mt.df <- data.frame()
+for(i in 1:length(mt.genes))
+{
+  mt.df[1:ncol(pbmc),i] <- PercentageFeatureSet(pbmc, pattern = mt.genes[i])
+  colnames(mt.df)[i] <- paste0("rna_",mt.genes[i], collapse = '')
+}
+
+pbmc@meta.data <- pbmc@meta.data %>% 
+  cbind(., mt.df)
+```
+
+```{r ribosomal genes}
+
+# Ribosomal genes also tend to be very highly represented, and can vary between cell types, so it can be instructive to see how prevalent they are in the data. These are ribosomal protein genes rather than the actual rRNA, so they’re more a measure of the translational activity of the cell rather than the cleanliness of the polyA selection.
+
+#grep("^RP[LS]",rownames(mono@assays$RNA@counts),value = TRUE)
+PercentageFeatureSet(pbmc,pattern="^RP[LS]") -> pbmc$percent.Ribosomal
+#head(mono$percent.Ribosomal)
+```
+
+<!-- ```{r largest_gene} -->
+<!-- #  In this example we run apply over the columns (cells) and calculate what percentage of the data comes from the single most observed gene. Again, having a high proportion of your data dominated by a single gene is a metric which could either give biological context or indicate a technical problem, depending on what the gene is. -->
+<!-- #  -->
+<!-- # When we calculate this we normally find that MALAT1 is normally the largest gene by some distance - it’s a non-coding nuclear gene expressed at very high levels. This has such a big effect that we’ll measure it separately, and exclude it from our analysis here. -->
+<!-- #  -->
+<!-- # We will get: -->
+<!-- #  -->
+<!-- #     The count for the largest gene per cell -->
+<!-- #  -->
+<!-- #     The index position of the gene with the largest count -->
+<!-- #  -->
+<!-- #     The name of the most highly expressed gene per cell -->
+
+<!-- mono[rownames(mono) != "FTL",] -> mono.nomalat -->
+
+<!-- apply( -->
+<!--   mono.nomalat@assays$RNA@counts, -->
+<!--   2, -->
+<!--   max -->
+<!-- ) -> mono.nomalat$largest_count -->
+
+<!-- apply( -->
+<!--   mono.nomalat@assays$RNA@counts, -->
+<!--   2, -->
+<!--   which.max -->
+<!-- ) -> mono.nomalat$largest_index -->
+
+<!-- rownames(mono.nomalat)[mono.nomalat$largest_index] -> mono.nomalat$largest_gene -->
+
+<!-- 100 * mono.nomalat$largest_count / mono.nomalat$nCount_RNA -> mono.nomalat$percent.Largest.Gene -->
+
+<!-- mono.nomalat$largest_gene -> mono$largest_gene -->
+<!-- mono.nomalat$percent.Largest.Gene -> mono$percent.Largest.Gene -->
+
+<!-- rm(mono.nomalat) -->
+
+<!-- ``` -->
+
+Demultiplex 1: Assign donor to cells - singlets, doublets, negatives using vireo
+
+a) match donor ID with samples (cells) 
+```{r demultiplexing_vireo}
+
+# install / upgrade vireoSNP using pip install --upgrade --no-deps vireoSNP
+# vireo to check installation errors
+# download all cellSNP file from library -> save vcf file as .gz, leave others un-gzipped
+# error: index out of range -> solved by downloading the files again and redoing vireo
+# command line: vireo -c cellSNP_mat/ -N 5 -o vireo_result/
+
+# add vireo output to meta data
+pbmc.demul <- pbmc
+snp <- read.delim(paste("../counts/",lib_name,"/vireo_result/donor_ids.tsv", sep = ""))
+meta <- pbmc.demul@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(snp)
+
+table(meta$donor_id)
+# remove doublets and unassigned
+pbmc.demul@meta.data <- meta
+
+Idents(pbmc.demul) <- "donor_id"
+pbmc.singlet.donor <- pbmc.demul@meta.data %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+pbmc.demul@meta.data <- pbmc.singlet.donor
+
+pbmc.singlet.donor <- subset(x = pbmc.demul, idents = c("doublet", "unassigned"), invert = T)
+
+pbmc <- pbmc.singlet.donor
+
+# identical(meta$cell, rownames(pbmc@meta.data))
+# [1] TRUE
+```
+
+
+```{r Visviolin}
+# Visualize QC metrics as a violin plot
+DefaultAssay(pbmc) <- "RNA"
+VlnPlot(pbmc, features=c("nCount_RNA", "nFeature_RNA", "percent.mt"), group.by = "orig.ident") 
+
+ggplot(pbmc@meta.data, aes(x = nFeature_RNA)) + geom_histogram(binwidth = 50)
+#ggplot(pbmc@meta.data, aes(x = nFeature_RNA)) + geom_histogram(binwidth = 20) + xlim(c(0, 600))
+
+ggplot(pbmc@meta.data, aes(x = nCount_RNA)) + geom_histogram(binwidth = 50)
+#ggplot(pbmc@meta.data, aes(x = nCount_RNA)) + geom_histogram(binwidth = 50) + xlim(c(0, 5000))
+
+ggplot(pbmc@meta.data, aes(x = percent.mt)) + geom_histogram(binwidth = 1)
+
+#ggplot(pbmc@meta.data, aes(x = percent.Ribosomal)) + geom_histogram(binwidth = 1)
+
+#ggplot(pbmc@meta.data, aes(x = percent.Largest.Gene)) + geom_histogram(binwidth = 1)
+
+```
+
+```{r featurescatter}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + geom_smooth(method = "lm")
+plot1 + plot2
+#FeatureScatter(pbmc,feature1 = "nCount_RNA", feature2 = "percent.Largest.Gene")
+```
+
+```{r}
+deadcell_nF_lowercutoff <- 700
+deadcell_nF_uppercutoff <- 5000
+# deadcell_nC_lowercutoff <- 100
+# deadcell_nC_uppercutoff <- 1000
+deadcell_mt_cutoff <- 15
+
+pbmc@meta.data <- pbmc@meta.data %>% 
+  mutate(is.dead = case_when((
+      nFeature_RNA >= deadcell_nF_lowercutoff & 
+      nFeature_RNA <= deadcell_nF_uppercutoff &
+      percent.mt <= deadcell_mt_cutoff #&
+      # nCount_RNA >= deadcell_nC_lowercutoff & 
+      # nCount_RNA <= deadcell_nC_uppercutoff 
+      ~ "FALSE"),
+      TRUE ~ "TRUE"))
+
+table(pbmc.meta$is.dead)
+
+ggplot(pbmc.meta, aes(x = nFeature_RNA, fill = factor(is.dead))) +
+  geom_histogram(bins = 50, position = "identity", alpha = 0.5)
+
+ggplot(pbmc.meta, aes(x = nCount_RNA, fill = factor(is.dead))) +
+  geom_histogram(bins = 50, position = "identity", alpha = 0.5)
+
+ggplot(pbmc.meta, aes(x = percent.mt, fill = factor(is.dead))) +
+  geom_histogram(bins = 50, position = "identity", alpha = 0.5)
+
+```
+
+
+
+```{r filtering}
+pbmc1 <- subset(pbmc, subset =  nFeature_RNA >= deadcell_nF_lowercutoff & nFeature_RNA <= deadcell_nF_uppercutoff & percent.mt <= deadcell_mt_cutoff) #nCount_RNA >= 1000 &
+pbmc1
+VlnPlot(pbmc1, features=c("nCount_RNA", "nFeature_RNA", "percent.mt"), group.by = "orig.ident") 
+pbmc = pbmc1
+rm(pbmc1)
+```
+
+```{r save}
+#save.image("malaria_monocyte_QC.RData")
+```

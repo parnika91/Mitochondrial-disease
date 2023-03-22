@@ -1,0 +1,65 @@
+---
+title: "Single cell RNA-seq of Plasmodium sporozoite-infected monocytes"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  toc: TRUE
+---
+
+```{r, echo = F}
+knitr::opts_chunk$set(warning = F, message = F)
+# knitr::opts_chunk$set(fig.pos = "!H", out.extra = "")
+#knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+
+```
+
+```{r load_libraries, echo = F, message = F, warning = F}
+library(Seurat)
+library(patchwork)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(broom)
+library(stringr)
+#remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
+#library(DoubletFinder)
+```
+
+```{r data_discovery, echo = F}
+samplesheet <- read_excel("/media/parnika/Expansion1/Documents/Projects/malaria_scRNAseq/a_2022_Malaria_samples_scRNAseq_nucleotide_sequencing.xlsx")
+colnames(samplesheet) <- samplesheet[1,]
+samplesheet <- samplesheet[-1,]
+colnames(samplesheet)[34] <- "Library_name"
+colnames(samplesheet)[1] <- "Condition_name"
+colnames(samplesheet)[15] <- "Protocol1"
+colnames(samplesheet)[21] <- "Protocol2"
+colnames(samplesheet)[35] <- "Protocol3"
+colnames(samplesheet)[36] <- "Perform Date2"
+
+libraries <- unique(samplesheet$Library_name)
+
+samplesheet %>% filter(Library_name == "EXP1_l1")
+
+table(samplesheet$`Multiplex Tag`, samplesheet$Library_name)
+
+table(samplesheet$Condition_name, samplesheet$Library_name)
+
+```
+
+```{r loop, echo = F}
+
+# for(i in 1:length(libraries))
+# {
+#   lib_name <- libraries[i]
+#   hto_used <- samplesheet %>% 
+#     filter(Library_name == lib_name) %>% 
+#     pull(`Multiplex Tag`) %>% 
+#     unique
+#   
+  rmarkdown::render("allsteps.Rmd")
+#}
+
+```

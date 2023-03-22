@@ -1,0 +1,1102 @@
+---
+title: "MITD - healthy vs mt-TL1"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+  pdf_document: default
+  toc: TRUE
+---
+
+```{r}
+ knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(broom)
+library(stringr)
+library(ggplot2)
+library(SeuratData)
+#library(celldex)
+#install.packages("cowplot")
+library(cowplot)
+#devtools::install_github('cole-trapnell-lab/monocle3')
+library(monocle3)
+#remotes::install_github('satijalab/seurat-wrappers')
+library(SeuratWrappers)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(data.table)
+# mulattoes::install('multtest')
+# install.packages('metap')
+#library(metap)
+#remotes::install_github("satijalab/seurat-data")
+```
+
+```{r, eval = F}
+# load saved merged data created in merged_data_analysis.Rmd
+pbmc.cells <- readRDS("pbmc.cells.livecells.metadata_l1_l2_l4.rds")
+
+```
+
+```{r, eval = F}
+# MT percent
+#grep("^MT-",rownames(mono@assays$RNA@counts),value = TRUE)
+
+pbmc.cells[["percent.mt"]] <- PercentageFeatureSet(pbmc.cells, pattern = "^MT-")
+#head(mono$percent.mt)
+
+# add % of all MT genes
+
+mt.genes <- rownames(pbmc.cells)[grep(rownames(pbmc.cells), pattern = "^MT-")]
+mt.df <- data.frame()
+for(i in 1:length(mt.genes))
+{
+  mt.df[1:ncol(pbmc.cells),i] <- PercentageFeatureSet(pbmc.cells, pattern = mt.genes[i])
+  colnames(mt.df)[i] <- paste0("rna_",mt.genes[i], collapse = '')
+}
+
+pbmc.cells@meta.data <- pbmc.cells@meta.data %>% 
+  cbind(., mt.df)
+
+```
+
+```{r, eval = F}
+# select libraries and donors for comparison
+pbmc.libs <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD2_l4"))
+pbmc.libs <- subset(pbmc.libs, subset = Donorid %in% c("D01", "D02", "H01", "H02",
+                                                       "D05", "D06", "H05", "H06"))
+
+```
+
+```{r, eval = F}
+# normalise
+pbmc.libs <- NormalizeData(pbmc.libs, normalization.method = "LogNormalize", scale.factor = 10000)
+pbmc.libs <- FindVariableFeatures(pbmc.libs, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+# top10 <- head(VariableFeatures(pbmc.libs), 10)
+# top10
+
+# plot variable features with and without labels
+# plot1 <- VariableFeaturePlot(pbmc.libs)
+# plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+# 
+# plot2
+
+all.genes <- rownames(pbmc.libs)
+pbmc.libs <- ScaleData(pbmc.libs, features = all.genes)
+```
+
+```{r, eval = F}
+#dim red
+pbmc.libs <- RunPCA(pbmc.libs, features = VariableFeatures(object = pbmc.libs))
+#DimPlot(pbmc,reduction="pca")
+#DimPlot(pbmc,reduction="pca", group.by = "largest_gene", label = TRUE, label.size = 3)# + NoLegend()
+#DimPlot(pbmc,reduction="pca", dims=c(3,4))
+# Examine and visualize PCA results a few different ways
+
+#print(pbmc.libs[["pca"]], dims = 1:5, nfeatures = 5)
+
+#VizDimLoadings(pbmc.libs, dims = 1:5, reduction = "pca")
+
+pbmc.libs <- JackStraw(pbmc.libs, num.replicate = 50)
+pbmc.libs <- ScoreJackStraw(pbmc.libs, dims = 1:20)
+
+# The JackStrawPlot() function provides a visualization tool for comparing the distribution of p-values for each PC with a uniform distribution (dashed line). ‘Significant’ PCs will show a strong enrichment of features with low p-values (solid curve above the dashed line). In this case it appears that there is a sharp drop-off in significance after the first 10-12 PCs.
+
+#JackStrawPlot(pbmc.libs, dims = 1:20)
+
+ElbowPlot(pbmc.libs)
+
+dims_to_use = 20
+
+DimHeatmap(pbmc.libs, dims = 1, cells = 1000, balanced = TRUE)
+
+DimHeatmap(pbmc.libs, dims = 2:5, cells = 1000, balanced = TRUE)
+
+8482 -> saved.seed
+set.seed(saved.seed)
+
+# RunTSNE(
+#   pbmc.libs,
+#   dims=1:dims_to_use,
+#   seed.use = saved.seed, 
+#   perplexity=20
+# ) -> pbmc.libs
+# 
+# DimPlot(pbmc.libs, group.by = "HTO_classification", reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 20")
+
+RunTSNE(
+  pbmc.libs,
+  dims=1:dims_to_use,
+  seed.use = saved.seed,
+  pexplexity = 70
+) -> pbmc.libs
+
+
+
+pbmc.libs <- FindNeighbors(pbmc.libs, dims = 1:dims_to_use)
+pbmc.libs@graphs$RNA_snn[1:20,1:20]
+
+pbmc.libs <- FindClusters(pbmc.libs, resolution = 0.9)
+pbmc.libs <- RunUMAP(pbmc.libs, dims = 1:dims_to_use)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+# saveRDS(pbmc.libs, "MELAS_vs_healthy.all.processing.uptoUMAP_l1_l4_specific_donors.rds")
+```
+```{r}
+pbmc.libs <- readRDS("MELAS_vs_healthy.all.processing.uptoUMAP_l1_l4_specific_donors.rds")
+```
+
+```{r}
+DimPlot(pbmc.libs,group.by = "HTO_classification",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.libs,group.by = "Donorid",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.libs,group.by = "Group",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+```
+
+```{r}
+# manual annotation in between l1 and l2
+l1_l2 <- data.frame(l1 = pbmc.libs@meta.data$predicted.celltype.l1,
+                    l2 = pbmc.libs@meta.data$predicted.celltype.l2) %>% 
+  distinct(l2, .keep_all= T)
+
+l1_l2 <- l1_l2 %>% 
+  mutate(manual.celltype.l1.l2 = case_when(
+    l2 == "NK" ~ "NK",
+    l2 %in% c("NK Proliferating", "NK_CD65bright") ~ "other NK",
+    
+    l2 == "CD14 Mono" ~ "CD14 Mono",
+    l2 == "CD16 Mono" ~ "CD16 Mono",
+    
+    l2 == "CD8 Naive" ~ "CD8 Naive",
+    l2 %in% c("CD8 TEM", "CD8 TCM", "CD8 Proliferating") ~ "other CD8 T",
+    
+    l2 == "CD4 Naive" ~ "CD4 Naive",
+    l2 %in% c("CD4 TEM", "CD4 TCM", "CD4 Proliferating",
+              "CD4 CTL", "Treg", "dnT") ~ "other CD4 T",
+    
+    l2 %in% c("MAIT", "gdT") ~ "other T",
+    
+    l2 == "B naive" ~ "B Naive",
+    l2 %in% c("B intermediate", "B memory", "Plasmablast") ~ "other B",
+    
+    l2 %in% c("Platelet", "HSPC", "ILC") ~ "other",
+    
+    l2 %in% c("pDC", "cDC1", "cDC2") ~ "DC"
+    
+  )) %>% 
+  mutate(predicted.celltype.l1 = l1,
+         predicted.celltype.l2 = l2) %>% 
+  select(-c(l1, l2))
+
+meta.data <- pbmc.libs@meta.data %>% 
+  left_join(l1_l2) %>% 
+  relocate(manual.celltype.l1.l2, .after = predicted.celltype.l2)
+
+rownames(meta.data) <- rownames(pbmc.libs@meta.data)
+
+pbmc.libs@meta.data <- meta.data
+############### check this!!!! #################
+# for these NA rows, the l1 does not match up with l2
+na.rows <- which(is.na(pbmc.libs@meta.data$manual.celltype.l1.l2))
+check.meta <- pbmc.libs@meta.data[na.rows,]
+
+l1_l2_check <- data.frame(l1 = pbmc.libs@meta.data$predicted.celltype.l1,
+                    l2 = pbmc.libs@meta.data$predicted.celltype.l2) %>% 
+  distinct(l2, .keep_all= T)
+remove_cells <- rownames(check.meta)
+```
+
+```{r, fig.dim = c(10,8)}
+DimPlot(pbmc.libs,group.by = "HTO_classification", reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Donorid",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Group",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+ggsave("MELAS_vs_healthy_umap_celltypes_nosplit.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+DimPlot(pbmc.libs, group.by = "orig.ident",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend() + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+
+DimPlot(pbmc.libs, reduction = "umap", label = F, split.by = "Group", group.by = "predicted.celltype.l2") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_legends.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l1") + NoLegend() + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_upperlevel_annotation.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+
+DimPlot(pbmc.libs, reduction = "umap", label = F, split.by = "Group", group.by = "predicted.celltype.l1") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_legends_upperlevel_annotation.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+DimPlot(pbmc.libs, reduction = "umap", label = T, label.size = 5, group.by = "seurat_clusters") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_numberlegends_level2_annotation.pdf", dpi = 300, width = 35, height = 30, units = "cm")
+
+DimPlot(pbmc.libs, reduction = "umap", label = F, group.by = "predicted.celltype.l2") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_textlegends_level2_annotation.pdf", dpi = 300, width = 35, height = 30, units = "cm")
+
+Idents(pbmc.libs) <- "Group"
+healthy_cells <- CellsByIdentities(pbmc.libs, idents = "Healthy")
+mtTL1_cells <- CellsByIdentities(pbmc.libs, idents = "mt-TL1")
+
+healthy_cells <- WhichCells(pbmc.libs, idents = "Healthy")
+mtTL1_cells <- WhichCells(pbmc.libs, idents = "mt-TL1")
+
+
+p1 <- DimPlot(pbmc.libs, label = F, pt.size = 0.01,
+        cells.highlight = healthy_cells, 
+        sizes.highlight = 0.01,
+        cols.highlight = c("cornflowerblue"), cols = "gray80")
+
+p2 <- DimPlot(pbmc.libs, label = F, pt.size = 0.01,
+        cells.highlight = mtTL1_cells, 
+        sizes.highlight = 0.01,
+        cols.highlight = c("salmon"), cols = "gray80")
+
+p1 + p2
+ggsave("MELAS_vs_healthy_umap_celltypes_group_highlight.pdf", dpi = 300, width = 40, height = 20, units = "cm")
+
+
+```
+
+
+
+```{r}
+
+pbmc_nona <- pbmc.libs[,!colnames(pbmc.libs) %in% remove_cells]
+
+DimPlot(pbmc_nona, reduction = "umap", label = F, split.by = "Group", group.by = "manual.celltype.l1.l2") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_legends_manual_annotation.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+DimPlot(pbmc_nona, reduction = "umap", label = F, group.by = "manual.celltype.l1.l2") + ggtitle("Healthy vs MELAS celltypes")
+ggsave("MELAS_vs_healthy_umap_celltypes_nosplit_manual_annotation.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+pbmc.libs@meta.data <- pbmc.libs@meta.data %>% 
+  mutate(d_h = case_when(
+    grepl(sample_id_johan, pattern = "disease") ~ "disease",
+    .default = "healthy"
+  ))
+
+pbmc.libs_disease <- subset(pbmc.libs, subset = d_h == "disease")
+
+#png(paste0("UMAP_pbmc.libs_disease_", lib_name, ".png"), res = 300, width = 30, height = 12, units = "cm")
+DimPlot(pbmc.libs_disease, 
+        reduction = "umap", 
+        group.by = "predicted.celltype.l2", 
+        split.by = "Donorid", 
+        label = T,
+        label.size = 4,
+        repel = T) +
+  NoLegend()
+#dev.off()
+
+pbmc.libs_healthy <- subset(pbmc.libs, subset = d_h == "healthy")
+
+#png(paste0("UMAP_pbmc.libs_healthy_", lib_name, ".png"), res = 300, width = 30, height = 12, units = "cm")
+DimPlot(pbmc.libs_healthy, 
+        reduction = "umap", 
+        group.by = "predicted.celltype.l2", 
+        split.by = "Donorid", 
+        label = T,
+        label.size = 4,
+        repel = T) +
+  NoLegend()
+#dev.off()
+
+```
+
+# Pseudobulk RNA-seq analysis
+```{r}
+#deseq2
+# aggregate expression
+data <- pbmc.libs
+data@meta.data <- data@meta.data %>% 
+  mutate(predicted.celltype.l2 = case_when(
+    predicted.celltype.l2 == "NK_CD56bright" ~ "NK CD56bright",
+    .default = predicted.celltype.l2)
+  )
+
+data@meta.data$cond_group <- paste(data@meta.data$Group,
+                                               data@meta.data$Donorid,
+                                               sep = "")
+
+cts <- AggregateExpression(data,
+              group.by = c("predicted.celltype.l2", "cond_group"),
+              assays = "RNA",
+              slot = "counts",
+              return.seurat = F)
+cts <- cts$RNA
+
+# transpose
+cts.t <- as.data.frame(t(cts))
+
+# split.data.frame
+splitRows <- gsub('_.*', '', rownames(cts.t))
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows))
+
+# fix colnames and transpose
+cts.modified <- lapply(cts.split, function(x){
+  rownames(x) <- gsub("(.+?)(\\_.*)", "\\2", rownames(x))
+  rownames(x) <- gsub("^_", "\\1", rownames(x))
+  t(x)
+})
+
+```
+
+```{r}
+# Run DE analysis
+
+up_down_reg_table <- data.frame()
+celltypes = c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM", "CD4 CTL", "B naive")
+
+pseudobulk <- function(cts.modified, celltypes)
+{
+  for(i in 1:length(celltypes))
+  {
+    # 1. Get counts matrix
+    counts <- cts.modified[[celltypes[i]]]
+    data_counts <- subset(data, subset = predicted.celltype.l2 == celltypes[i])
+    
+    # 2 Generate metadata
+    colData <- data.frame(sample = colnames(counts))
+    colData$condition = gsub('.{3}$', '', colData$sample)
+    
+    colData <- colData %>% 
+      column_to_rownames("sample")
+    
+    # DEseq2 object
+    dds <- DESeqDataSetFromMatrix(countData = counts,
+                                 colData = colData,
+                                 design = ~condition)
+    
+    # filter dds
+    keep <- rowSums(counts(dds)) >= 10
+    dds <- dds[keep,]
+    dds <- DESeq(dds)
+    
+    # Transform counts for data visualization
+    rld <- rlog(dds, blind=F)
+    
+    # Plot PCA
+    #print(DESeq2::plotPCA(rld, ntop = 500, intgroup = "condition"))
+
+    comparison <- c("condition_mt.TL1_vs_Healthy")
+
+    res <- results(dds, name = comparison, alpha = 0.05)
+    
+    res_tbl <- res %>%
+      data.frame() %>%
+      rownames_to_column(var = "gene") %>%
+      as_tibble() %>%
+      arrange(padj)
+    
+    padj_cutoff <- 0.1
+
+    # Subset the significant results
+    sig_res <- dplyr::filter(res_tbl, padj < padj_cutoff) %>%
+      dplyr::arrange(padj)
+    
+    total_up <- nrow(filter(sig_res, log2FoldChange >= 0))
+    total_down <- nrow(filter(sig_res, log2FoldChange < 0))
+    
+    up_down_reg_table[i,1] <- celltypes[i]
+    up_down_reg_table[i,2] <- total_up
+    up_down_reg_table[i,3] <- total_down
+  }
+  colnames(up_down_reg_table) <- c("celltype", "up", "down")
+  up_down_reg_table_long <- pivot_longer(data = up_down_reg_table,
+                                         cols = c("up", "down"),
+                                         names_to = "Regulation",
+                                         values_to = "Genes")
+  
+  
+  return(up_down_reg_table_long)
+}
+
+tab <- pseudobulk(cts.modified = cts.modified, celltypes = celltypes)
+
+ggplot(tab, aes(celltype, Genes, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.5) +
+  theme_bw()
+
+```
+
+
+<!-- ```{r} -->
+<!-- # Transform counts for data visualization -->
+<!-- rld <- rlog(dds, blind=F) -->
+
+<!-- # Plot PCA -->
+<!-- DESeq2::plotPCA(rld, ntop = 500, intgroup = "condition") -->
+
+<!-- # Extract the rlog matrix from the object and compute pairwise correlation values -->
+<!-- rld_mat <- assay(rld) -->
+<!-- rld_cor <- cor(rld_mat) -->
+
+<!-- # Plot heatmap -->
+<!-- pheatmap(rld_cor, annotation = colData[, c("condition"), drop=F]) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- # check the coefficients -->
+<!-- resultsNames(dds) -->
+<!-- comparison <- c("condition_mt.TL1_vs_Healthy") -->
+
+<!-- res <- results(dds, name = comparison, alpha = 0.05) -->
+<!-- # res <- lfcShrink(dds,  -->
+<!-- #                  coef =  comparison, -->
+<!-- #                  res=res, -->
+<!-- #                  type = "apeglm") -->
+<!-- res -->
+
+
+<!-- # Turn the DESeq2 results object into a tibble for use with tidyverse functions -->
+<!-- res_tbl <- res %>% -->
+<!--   data.frame() %>% -->
+<!--   rownames_to_column(var = "gene") %>% -->
+<!--   as_tibble() %>% -->
+<!--   arrange(padj) -->
+
+<!-- # Check results output -->
+<!-- res_tbl  -->
+
+<!-- # Write all results to file -->
+<!-- write.csv(res_tbl, -->
+<!--           paste0(comparison,".csv"), -->
+<!--           quote = FALSE,  -->
+<!--           row.names = FALSE) -->
+
+<!-- #### -->
+<!-- padj_cutoff <- 0.05 -->
+
+<!-- # Subset the significant results -->
+<!-- sig_res <- dplyr::filter(res_tbl, pvalue < padj_cutoff) %>% -->
+<!--   dplyr::arrange(padj) -->
+
+<!-- # Check significant genes output -->
+<!-- sig_res -->
+
+<!-- # Write all results to file -->
+<!-- write.csv(sig_res, -->
+<!--           paste0(comparison,"_sig.csv"), -->
+<!--           quote = FALSE,  -->
+<!--           row.names = FALSE) -->
+
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Scatterplot -->
+
+<!-- ## Extract normalized counts from dds object -->
+<!-- normalized_counts <- counts(dds, normalized = TRUE) -->
+
+<!-- ## Extract top 20 DEG from resLFC (make sure to order by padj) -->
+<!-- top20_sig_genes <- sig_res %>% -->
+<!--   dplyr::arrange(padj) %>% -->
+<!--   dplyr::pull(gene) %>% -->
+<!--   head(n = 20) -->
+
+<!-- ## Extract matching normalized count values from matrix -->
+<!-- top20_sig_counts <- normalized_counts[rownames(normalized_counts) %in% top20_sig_genes, ] -->
+<!-- top20_sig_counts -->
+
+<!-- ## Convert wide matrix to long data frame for ggplot2 -->
+<!-- top20_sig_df <- data.frame(top20_sig_counts) -->
+<!-- top20_sig_df$gene <- rownames(top20_sig_counts) -->
+
+<!-- top20_sig_df <- melt(setDT(top20_sig_df),  -->
+<!--                      id.vars = c("gene"), -->
+<!--                      variable.name = "condition") %>%  -->
+<!--   data.frame() -->
+
+<!-- ## Replace "." by " " in cluster_sample_id variable (melt() introduced the ".") -->
+<!-- top20_sig_df$condition <- gsub("\\.", " ", top20_sig_df$condition) -->
+<!-- top20_sig_df -->
+
+<!-- ## Join counts data frame with metadata -->
+<!-- top20_sig_df <- plyr::join(top20_sig_df, as.data.frame(colData(dds)), -->
+<!--                            by = "condition") -->
+<!-- top20_sig_df -->
+
+<!-- ## Generate plot -->
+<!-- #png("healthy_mtTL1_MITD1_l1_pergene.png", res = 300, width = 20, height = 15, units = "cm") -->
+<!-- ggplot(top20_sig_df, aes(y = value, x = condition, col = condition)) + -->
+<!--   geom_jitter(height = 0, width = 0.15, size = 2) + -->
+<!--   scale_y_continuous(trans = 'log10') + -->
+<!--   ylab("log10 of normalized expression level") + -->
+<!--   xlab("condition") + -->
+<!--   ggtitle("Top 20 Significant DE Genes") + -->
+<!--   theme(plot.title = element_text(hjust = 0.5), -->
+<!--         axis.text.x = element_text(angle = 45, hjust = 1)) + -->
+<!--   facet_wrap(~ gene) -->
+<!-- #dev.off() -->
+
+<!-- ``` -->
+
+
+```{r}
+# Heatmap
+
+pseudobulk_heatmap <- function(cts.modified, celltype)
+{
+  # 1. Get counts matrix
+    counts <- cts.modified[[celltype]]
+    data_counts <- subset(data, subset = predicted.celltype.l2 == celltype)
+    
+    # 2 Generate metadata
+    colData <- data.frame(sample = colnames(counts))
+    colData$condition = gsub('.{3}$', '', colData$sample)
+    
+    colData <- colData %>% 
+      column_to_rownames("sample")
+    
+    # DEseq2 object
+    dds <- DESeqDataSetFromMatrix(countData = counts,
+                                 colData = colData,
+                                 design = ~condition)
+    
+    # filter dds
+    keep <- rowSums(counts(dds)) >= 10
+    dds <- dds[keep,]
+    dds <- DESeq(dds)
+    
+    # Transform counts for data visualization
+    rld <- rlog(dds, blind=F)
+    
+    # Plot PCA
+    print(DESeq2::plotPCA(rld, ntop = 500, intgroup = "condition"))
+
+    comparison <- c("condition_mt.TL1_vs_Healthy")
+
+    res <- results(dds, name = comparison, alpha = 0.05)
+    
+    res_tbl <- res %>%
+      data.frame() %>%
+      rownames_to_column(var = "gene") %>%
+      as_tibble() %>%
+      arrange(padj)
+    
+    padj_cutoff <- 0.1
+
+    # Subset the significant results
+    sig_res <- dplyr::filter(res_tbl, padj < padj_cutoff) %>%
+      dplyr::arrange(padj)
+    
+    up_table <- filter(sig_res, log2FoldChange >= 0)
+    down_table <- filter(sig_res, log2FoldChange < 0)
+    
+    ## Extract normalized counts from dds object
+    normalized_counts <- counts(dds, normalized = TRUE)
+    
+    ## Extract normalized counts for significant genes only
+    sig_counts <- normalized_counts[rownames(normalized_counts) %in% sig_res$gene, ]
+    
+    return(list(up_table, down_table, sig_counts))
+}
+```
+
+## CD14 Monocytes
+```{r}
+
+cd14 <- pseudobulk_heatmap(cts.modified = cts.modified, celltype = "CD14 Mono")
+data_counts <- subset(data, subset = predicted.celltype.l2 == "CD14 Mono")
+## Set a color-blind friendly palette
+heat_colors <- rev(brewer.pal(11, "PuOr"))
+
+annot = data_counts@meta.data %>% 
+  as.data.frame() %>% 
+  select(Donorid, Group, abundance, sex, age) %>% 
+  distinct(Donorid, .keep_all = T) %>% 
+  mutate(Donor_group = paste(Group, Donorid, sep = "")) %>% 
+  select(-c(Donorid)) %>% 
+  remove_rownames() %>% 
+  column_to_rownames("Donor_group")
+
+# col_annot = HeatmapAnnotation(
+#   Donor_group = rownames(annot),
+#   Donorid = annot$Donorid,
+#   Group = annot$Group,
+#   Abundance = anno_barplot(annot$abundance),
+#   Sex = annot$sex,
+#   Age = anno_barplot(annot$age)
+# )
+## Run pheatmap using the metadata data frame for the annotation
+pdf("MELAS_vs_healthy_heatmap_CD14.pdf")
+pheatmap(cd14[[3]],
+         color = heat_colors,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         annotation_col = annot,
+         border_color = NA,
+         fontsize = 7,
+         scale = "row",
+         fontsize_row = 7,
+         cellheight = 10,
+         cellwidth = 20,
+         treeheight_row = 0)
+dev.off()
+# Heatmap(cd14[[3]], 
+#          #col = heat_colors, 
+#          cluster_rows = TRUE, 
+#         cluster_columns = T,
+#         show_row_dend = F,
+#         show_column_dend = T,
+#          row_labels = rownames(cd14[[3]]),
+#          top_annotation = col_annot,
+#          row_names_gp = gpar(fontsize = 8))  
+
+DT::datatable(cd14[[1]])
+
+DT::datatable(cd14[[2]])
+
+```
+
+## CD16 Monocytes
+
+```{r}
+
+cd16 <- pseudobulk_heatmap(cts.modified = cts.modified, celltype = "CD16 Mono")
+data_counts <- subset(data, subset = predicted.celltype.l2 == "CD16 Mono")
+## Set a color-blind friendly palette
+heat_colors <- rev(brewer.pal(11, "PuOr"))
+
+annot = data_counts@meta.data %>% 
+  as.data.frame() %>% 
+  select(Donorid, Group, abundance, sex, age) %>% 
+  distinct(Donorid, .keep_all = T) %>% 
+  mutate(Donor_group = paste(Group, Donorid, sep = "")) %>% 
+  remove_rownames() %>% 
+  column_to_rownames("Donor_group")
+
+# col_annot = HeatmapAnnotation(
+#   Donor_group = rownames(annot),
+#   Donorid = annot$Donorid,
+#   Group = annot$Group,
+#   Abundance = anno_barplot(annot$abundance),
+#   Sex = annot$sex,
+#   Age = anno_barplot(annot$age)
+# )
+## Run pheatmap using the metadata data frame for the annotation
+pdf("MELAS_vs_healthy_heatmap_CD16.pdf")
+pheatmap(cd16[[3]],
+         color = heat_colors,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         annotation_col = annot,
+         border_color = NA,
+         fontsize = 7,
+         scale = "row",
+         fontsize_row = 7,
+         height = 70,
+         cellwidth = 20,
+         treeheight_row = 0)
+dev.off()
+# Heatmap(cd16[[3]], 
+#          col = heat_colors, 
+#          cluster_rows = TRUE, 
+#         cluster_columns = T,
+#         show_row_dend = F,
+#         show_column_dend = T,
+#          row_labels = rownames(cd14[[3]]),
+#          top_annotation = col_annot,
+#          row_names_gp = gpar(fontsize = 8))  
+
+DT::datatable(cd16[[1]])
+
+DT::datatable(cd16[[2]])
+
+```
+
+
+## NK cells
+
+```{r}
+
+nk <- pseudobulk_heatmap(cts.modified = cts.modified, celltype = "NK")
+data_counts <- subset(data, subset = predicted.celltype.l2 == "NK")
+## Set a color-blind friendly palette
+heat_colors <- rev(brewer.pal(11, "PuOr"))
+
+annot = data_counts@meta.data %>% 
+  as.data.frame() %>% 
+  select(Donorid, Group, abundance, sex, age) %>% 
+  distinct(Donorid, .keep_all = T) %>% 
+  mutate(Donor_group = paste(Group, Donorid, sep = "")) %>% 
+  remove_rownames() %>% 
+  select(-c(Donorid)) %>% 
+  column_to_rownames("Donor_group")
+
+# col_annot = HeatmapAnnotation(
+#   Donor_group = rownames(annot),
+#   Donorid = annot$Donorid,
+#   Group = annot$Group,
+#   Abundance = anno_barplot(annot$abundance),
+#   Sex = annot$sex,
+#   Age = anno_barplot(annot$age)
+# )
+## Run pheatmap using the metadata data frame for the annotation
+pdf("MELAS_vs_healthy_heatmap_NK.pdf")
+pheatmap(nk[[3]],
+         color = heat_colors,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         annotation_col = annot,
+         border_color = NA,
+         fontsize = 7,
+         scale = "row",
+         fontsize_row = 7,
+         cellheight = 10,
+         cellwidth = 20,
+         treeheight_row = 0)
+dev.off()
+# Heatmap(nk[[3]], 
+#          col = heat_colors, 
+#          cluster_rows = TRUE, 
+#         cluster_columns = T,
+#         show_row_dend = F,
+#         show_column_dend = T,
+#          row_labels = rownames(cd14[[3]]),
+#          top_annotation = col_annot,
+#          row_names_gp = gpar(fontsize = 8))  
+
+DT::datatable(nk[[1]])
+
+DT::datatable(nk[[2]])
+
+```
+
+## CD4 TCM
+
+```{r}
+
+cd4tcm <- pseudobulk_heatmap(cts.modified = cts.modified, celltype = "CD4 TCM")
+data_counts <- subset(data, subset = predicted.celltype.l2 == "CD4 TCM")
+## Set a color-blind friendly palette
+heat_colors <- rev(brewer.pal(11, "PuOr"))
+
+annot = data_counts@meta.data %>% 
+  as.data.frame() %>% 
+  select(Donorid, Group, abundance, sex, age) %>% 
+  distinct(Donorid, .keep_all = T) %>% 
+  mutate(Donor_group = paste(Group, Donorid, sep = "")) %>% 
+  remove_rownames() %>% 
+  column_to_rownames("Donor_group")
+
+# col_annot = HeatmapAnnotation(
+#   Donor_group = rownames(annot),
+#   Donorid = annot$Donorid,
+#   Group = annot$Group,
+#   Abundance = anno_barplot(annot$abundance),
+#   Sex = annot$sex,
+#   Age = anno_barplot(annot$age)
+# )
+## Run pheatmap using the metadata data frame for the annotation
+pheatmap(nk[[3]],
+         color = heat_colors,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         annotation_col = annot,
+         border_color = NA,
+         fontsize = 7,
+         scale = "row",
+         fontsize_row = 7,
+         height = 70,
+         cellwidth = 20,
+         treeheight_row = 0)
+
+# Heatmap(cd4tcm[[3]], 
+#          col = heat_colors, 
+#          cluster_rows = TRUE, 
+#         cluster_columns = T,
+#         show_row_dend = F,
+#         show_column_dend = T,
+#          row_labels = rownames(cd14[[3]]),
+#          top_annotation = col_annot,
+#          row_names_gp = gpar(fontsize = 8))  
+
+DT::datatable(cd4tcm[[1]])
+
+DT::datatable(cd4tcm[[2]])
+
+```
+
+# Celltype percent
+```{r, fig.dim = c(10,8)}
+celltype.percent <- pbmc.libs@meta.data %>%
+  group_by(Donorid, predicted.celltype.l2) %>%
+  summarise(count = n()) %>%
+  mutate(celltype.percent = round(count / sum(count), 3)) %>% 
+  mutate(Donor = Donorid) %>% 
+  separate(Donorid, c("group", "index"), sep = "0")
+
+celltype.percent %>% 
+  filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+ggplot(aes(x = predicted.celltype.l2, y = celltype.percent, 
+           fill = factor(group), 
+           colour = factor(group))) + #  colour = group, 
+  geom_point(size = 4, aes(shape = index), alpha = 0.6, position = position_jitterdodge(jitter.width=0.3)) + #position_jitterdodge(dodge.width=0.3)
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  #facet_grid(index ~ orig.ident, scale = "free_x", ) +
+  scale_y_log10() +
+  theme_bw() +
+   theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+             strip.text = element_text(size = 14)) +
+   theme(axis.text = element_text(size = 9),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank()) 
+  # stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+  #                geom = "crossbar", width = 0.5, position = position_jitterdodge(jitter.width=0.3))
+
+celltype.percent %>% 
+  #filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+ggplot(aes(x = predicted.celltype.l2, y = celltype.percent, 
+           fill = factor(group), 
+           colour = factor(group), 
+           #,group = group
+           )) + #  colour = group, 
+  geom_point(size = 2, aes(shape = index), alpha = 0.6, position = position_jitterdodge(jitter.width=0.3)) + #position_jitterdodge(dodge.width=0.3)
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + #, aes(fill = predicted.celltype.l2)
+  #facet_grid(index ~ orig.ident, scale = "free_x", ) +
+  scale_y_log10() +
+  theme_bw() +
+   # theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+   #           strip.text = element_text(size = 14)) +
+   theme(axis.text = element_text(size = 9),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank())
+  # stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+  #                geom = "crossbar", width = 0.5, position = position_jitterdodge(jitter.width=0.3))
+```
+
+# MT gene expression
+
+```{r, fig.dim = c(10,8)}
+# MT gene expression
+
+mito.genes.df <- pbmc.libs@meta.data %>%
+  group_by(Donorid, predicted.celltype.l2) %>%
+  summarise(across(starts_with("rna_MT-"), ~ median(.), .names = "mean_{.col}"))
+#`summarise()` has grouped output by 'Donorid'. You can override using the `.groups` argument.
+
+mito.genes <- mito.genes.df %>%
+  pivot_longer(
+    cols = starts_with("mean_rna_MT-"),
+    names_to = "Mitochondrial.gene",
+    values_to = "Mean.Expression"
+  ) %>%
+  mutate(Mitochondrial.gene = gsub("mean_rna_", "", Mitochondrial.gene)) %>%
+  mutate(log2.Mean.Expression = -log2(Mean.Expression))
+
+# mito.genes.box <- pbmc.libs@meta.data %>%
+#       pivot_longer(
+#      cols = starts_with("rna_MT-"),
+#      names_to = "Mitochondrial.gene",
+#      values_to = "Expression"
+#    ) %>%
+#    mutate(Mitochondrial.gene = gsub("rna_", "", Mitochondrial.gene))
+
+mito.genes.dh <- mito.genes %>% 
+  mutate(Donor = Donorid) %>% 
+  separate(Donorid, c("group", "index"), sep = "0")
+
+
+  mito.genes.dh %>% 
+  filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+
+  ggplot(aes(x = Mitochondrial.gene, y = Mean.Expression,
+             fill = factor(group), 
+           colour = factor(group)
+           )) + #  colour = group, 
+  geom_point(size = 3, aes(shape = index), alpha = 0.7, position=position_jitterdodge(jitter.width=0.2)) +
+  geom_boxplot(outlier.shape = NA,alpha = 0.5) +
+  facet_wrap(~ predicted.celltype.l2) +
+  scale_y_log10() +
+  theme_bw() +
+   theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+             strip.text.x = element_text(size = 11)) +
+   theme(axis.text = element_text(size = 8),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank()) 
+
+```
+
+# Scoring modules based on Mitocarta
+
+```{r, fig.dim = c(10,6)}
+mitogenes <- read_excel("../Human.MitoCarta3.0.xls", 
+     sheet = "A Human MitoCarta3.0")
+
+mitogenes <- mitogenes %>% pull(Symbol)
+
+available_genes <- intersect(rownames(pbmc.libs), mitogenes)
+  
+#Is your genes.list input a vector of gene names? If yes, then you'll get an independent score for each gene. To get a single score, your input should be a list of a character vector of gene names.
+
+ModScore <- AddModuleScore(
+    #pbmc_nona,
+  pbmc.libs,
+  features = list(available_genes),
+  pool = NULL,
+  nbin = 24,
+  ctrl = 100,
+  k = FALSE,
+  assay = "RNA",
+  seed = 1,
+  search = FALSE,
+)
+
+Idents(ModScore) <- c("predicted.celltype.l2")
+ModScore.plot <- subset(ModScore, subset = predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK"))
+
+FeaturePlot(
+  ModScore.plot,
+  features = 'Cluster1',
+  dims = c(1, 2),
+  cells = NULL,
+  cols = rev(brewer.pal(n = 11, name = "RdBu")),
+  pt.size = NULL,
+  order = FALSE,
+  min.cutoff = NA,
+  max.cutoff = NA,
+  reduction = NULL,
+  split.by = "Group",
+  keep.scale = NULL,
+  shape.by = NULL,
+  slot = "data",
+  blend = FALSE,
+  blend.threshold = 0.5,
+  label = TRUE,
+  label.size = 3,
+  label.color = "black",
+  repel = F,
+  ncol = 2,
+  coord.fixed = FALSE,
+  by.col = TRUE,
+  sort.cell = NULL,
+  interactive = FALSE,
+  combine = TRUE,
+  raster = NULL,
+  raster.dpi = c(512, 512)
+) & theme(legend.position = c(2.2,0.2))
+ggsave("MELAS_vs_healthy_ModuleScore_Mitocarta_CD14_CD16_NK.pdf", width = 8, height = 5)
+
+
+FeaturePlot(
+  ModScore,
+  features = 'Cluster1',
+  dims = c(1, 2),
+  cells = NULL,
+  cols = rev(brewer.pal(n = 11, name = "RdBu")),
+  pt.size = NULL,
+  order = FALSE,
+  min.cutoff = NA,
+  max.cutoff = NA,
+  reduction = NULL,
+  split.by = "Group",
+  keep.scale = "feature",
+  shape.by = NULL,
+  slot = "data",
+  blend = FALSE,
+  blend.threshold = 0.5,
+  label = TRUE,
+  label.size = 4,
+  label.color = "black",
+  repel = F,
+  ncol = 2,
+  coord.fixed = FALSE,
+  by.col = TRUE,
+  sort.cell = NULL,
+  interactive = FALSE,
+  combine = TRUE,
+  raster = NULL,
+  raster.dpi = c(512, 512)
+) & theme(legend.position = c(2.2,0.1))
+ggsave("MELAS_vs_healthy_ModuleScore_Mitocarta_manual_annotation.pdf", width = 10, height = 8)
+
+# p1 <- FeaturePlot(ModScore_healthy,
+#             features = 'Cluster1', label = TRUE, label.size = 2, repel = TRUE) +
+#             scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+#   ggtitle("ModScore_healthy")
+# 
+# p2 <- FeaturePlot(ModScore_mtTL1,
+#             features = 'Cluster1', label = TRUE, label.size = 2, repel = TRUE) +
+#             scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+#   ggtitle("ModScore_mtTL1")
+# 
+# p1 + p2 + plot_layout(ncol = 2)
+# ggsave("MELAS_vs_healthy_ModuleScore_Mitocarta.pdf")
+
+ModScore_20 = subset(ModScore, subset = abundance == 20)
+ModScore_52 = subset(ModScore, subset = abundance == 52)
+ModScore_32 = subset(ModScore, subset = abundance == 32)
+ModScore_90 = subset(ModScore, subset = abundance == 90)
+
+p1 <- FeaturePlot(ModScore_20,
+            features = 'Cluster1', label = F, repel = F) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_mt-Tl1_20")
+
+p2 <- FeaturePlot(ModScore_52,
+            features = 'Cluster1', label = F, repel = F) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_mt-Tl1_52")
+
+p3 <- FeaturePlot(ModScore_32,
+            features = 'Cluster1', label = F, repel = F) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_mt-Tl1_32")
+
+p4 <- FeaturePlot(ModScore_90,
+            features = 'Cluster1', label = F, repel = F) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_mt-Tl1_90")
+
+p1 + p2 + p3 + p4 + 
+  plot_layout(ncol = 2)
+
+FeaturePlot(
+  ModScore,
+  features = 'Cluster1',
+  dims = c(1, 2),
+  cells = NULL,
+  cols = rev(brewer.pal(n = 11, name = "RdBu")),
+  pt.size = NULL,
+  order = FALSE,
+  min.cutoff = NA,
+  max.cutoff = NA,
+  reduction = NULL,
+  split.by = "abundance",
+  keep.scale = "feature",
+  shape.by = NULL,
+  slot = "data",
+  blend = FALSE,
+  blend.threshold = 0.5,
+  label = TRUE,
+  label.size = 2,
+  label.color = "black",
+  repel = FALSE,
+  ncol = 2,
+  coord.fixed = FALSE,
+  by.col = TRUE,
+  sort.cell = NULL,
+  interactive = FALSE,
+  combine = TRUE,
+  raster = NULL,
+  raster.dpi = c(512, 512)
+)
+```

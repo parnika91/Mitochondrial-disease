@@ -1,0 +1,715 @@
+---
+title: "MITD - healthy vs ARNt-Phe"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+  pdf_document: default
+  toc: TRUE
+---
+
+```{r}
+ knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(broom)
+library(stringr)
+library(ggplot2)
+library(SeuratData)
+#library(celldex)
+#install.packages("cowplot")
+library(cowplot)
+#devtools::install_github('cole-trapnell-lab/monocle3')
+library(monocle3)
+#remotes::install_github('satijalab/seurat-wrappers')
+library(SeuratWrappers)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(data.table)
+library(MAST)
+# mulattoes::install('multtest')
+# install.packages('metap')
+#library(metap)
+#remotes::install_github("satijalab/seurat-data")
+```
+
+```{r, eval = F}
+# load saved merged data created in merged_data_analysis.Rmd
+pbmc.cells <- readRDS("pbmc.cells.livecells.metadata_l1_l2_l4.rds")
+
+```
+
+```{r, eval = F}
+# MT percent
+#grep("^MT-",rownames(mono@assays$RNA@counts),value = TRUE)
+
+pbmc.cells[["percent.mt"]] <- PercentageFeatureSet(pbmc.cells, pattern = "^MT-")
+#head(mono$percent.mt)
+
+# add % of all MT genes
+
+mt.genes <- rownames(pbmc.cells)[grep(rownames(pbmc.cells), pattern = "^MT-")]
+mt.df <- data.frame()
+for(i in 1:length(mt.genes))
+{
+  mt.df[1:ncol(pbmc.cells),i] <- PercentageFeatureSet(pbmc.cells, pattern = mt.genes[i])
+  colnames(mt.df)[i] <- paste0("rna_",mt.genes[i], collapse = '')
+}
+
+pbmc.cells@meta.data <- pbmc.cells@meta.data %>% 
+  cbind(., mt.df)
+
+```
+
+```{r, eval = F}
+# select libraries and donors for comparison
+pbmc.libs <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD1_l2"))
+pbmc.libs <- subset(pbmc.libs, subset = Donorid %in% c("D03", "H03"))
+
+```
+
+```{r, eval = F}
+# normalise
+pbmc.libs <- NormalizeData(pbmc.libs, normalization.method = "LogNormalize", scale.factor = 10000)
+pbmc.libs <- FindVariableFeatures(pbmc.libs, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+# top10 <- head(VariableFeatures(pbmc.libs), 10)
+# top10
+
+# plot variable features with and without labels
+# plot1 <- VariableFeaturePlot(pbmc.libs)
+# plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+# 
+# plot2
+
+all.genes <- rownames(pbmc.libs)
+pbmc.libs <- ScaleData(pbmc.libs, features = all.genes)
+```
+
+```{r, eval = F}
+#dim red
+pbmc.libs <- RunPCA(pbmc.libs, features = VariableFeatures(object = pbmc.libs))
+#DimPlot(pbmc,reduction="pca")
+#DimPlot(pbmc,reduction="pca", group.by = "largest_gene", label = TRUE, label.size = 3)# + NoLegend()
+#DimPlot(pbmc,reduction="pca", dims=c(3,4))
+# Examine and visualize PCA results a few different ways
+
+#print(pbmc.libs[["pca"]], dims = 1:5, nfeatures = 5)
+
+#VizDimLoadings(pbmc.libs, dims = 1:5, reduction = "pca")
+
+pbmc.libs <- JackStraw(pbmc.libs, num.replicate = 50)
+pbmc.libs <- ScoreJackStraw(pbmc.libs, dims = 1:20)
+
+# The JackStrawPlot() function provides a visualization tool for comparing the distribution of p-values for each PC with a uniform distribution (dashed line). ‘Significant’ PCs will show a strong enrichment of features with low p-values (solid curve above the dashed line). In this case it appears that there is a sharp drop-off in significance after the first 10-12 PCs.
+
+#JackStrawPlot(pbmc.libs, dims = 1:20)
+
+ElbowPlot(pbmc.libs)
+
+dims_to_use = 20
+
+DimHeatmap(pbmc.libs, dims = 1, cells = 1000, balanced = TRUE)
+
+DimHeatmap(pbmc.libs, dims = 2:5, cells = 1000, balanced = TRUE)
+
+8482 -> saved.seed
+set.seed(saved.seed)
+
+# RunTSNE(
+#   pbmc.libs,
+#   dims=1:dims_to_use,
+#   seed.use = saved.seed, 
+#   perplexity=20
+# ) -> pbmc.libs
+# 
+# DimPlot(pbmc.libs, group.by = "HTO_classification", reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 20")
+
+RunTSNE(
+  pbmc.libs,
+  dims=1:dims_to_use,
+  seed.use = saved.seed,
+  pexplexity = 70
+) -> pbmc.libs
+
+
+
+pbmc.libs <- FindNeighbors(pbmc.libs, dims = 1:dims_to_use)
+pbmc.libs@graphs$RNA_snn[1:20,1:20]
+
+pbmc.libs <- FindClusters(pbmc.libs, resolution = 0.9)
+pbmc.libs <- RunUMAP(pbmc.libs, dims = 1:dims_to_use)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+ saveRDS(pbmc.libs, "ARNtPhe_vs_healthy.all.processing.uptoUMAP_l1_l4_specific_donors.rds")
+```
+
+```{r}
+pbmc.libs <- readRDS("ARNtPhe_vs_healthy.all.processing.uptoUMAP_l1_l4_specific_donors.rds")
+```
+
+```{r}
+DimPlot(pbmc.libs,group.by = "HTO_classification",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.libs,group.by = "Donorid",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.libs,group.by = "Group",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+```
+
+```{r}
+# manual annotation in between l1 and l2
+l1_l2 <- data.frame(l1 = pbmc.libs@meta.data$predicted.celltype.l1,
+                    l2 = pbmc.libs@meta.data$predicted.celltype.l2) %>% 
+  distinct(l2, .keep_all= T)
+
+l1_l2 <- l1_l2 %>% 
+  mutate(manual.celltype.l1.l2 = case_when(
+    l2 == "NK" ~ "NK",
+    l2 %in% c("NK Proliferating", "NK_CD56bright") ~ "other NK", 
+    
+    l2 == "CD14 Mono" ~ "CD14 Mono",
+    l2 == "CD16 Mono" ~ "CD16 Mono",
+    
+    l2 == "CD8 Naive" ~ "CD8 Naive",
+    l2 %in% c("CD8 TEM", "CD8 TCM", "CD8 Proliferating") ~ "other CD8 T",
+    
+    l2 == "CD4 Naive" ~ "CD4 Naive",
+    l2 %in% c("CD4 TEM", "CD4 TCM", "CD4 Proliferating",
+              "CD4 CTL", "Treg", "dnT") ~ "other CD4 T",
+    
+    l2 %in% c("MAIT", "gdT") ~ "other T",
+    
+    l2 == "B naive" ~ "B Naive",
+    l2 %in% c("B intermediate", "B memory", "Plasmablast") ~ "other B",
+    
+    l2 %in% c("Platelet", "HSPC", "ILC", "Eryth") ~ "other",
+    
+    l2 %in% c("pDC", "cDC1", "cDC2") ~ "DC",
+    .default = l1
+    
+  )) %>% 
+  mutate(predicted.celltype.l1 = l1,
+         predicted.celltype.l2 = l2) %>% 
+  select(-c(l1, l2, predicted.celltype.l1))
+
+meta.data <- pbmc.libs@meta.data %>% 
+  left_join(l1_l2) %>% 
+  relocate(manual.celltype.l1.l2, .after = predicted.celltype.l2)
+
+rownames(meta.data) <- rownames(pbmc.libs@meta.data)
+
+pbmc.libs@meta.data <- meta.data
+############### check this!!!! #################
+# for these NA rows, the l1 does not match up with l2
+na.rows <- which(is.na(pbmc.libs@meta.data$manual.celltype.l1.l2))
+check.meta <- pbmc.libs@meta.data[na.rows,]
+
+l1_l2_check <- data.frame(l1 = pbmc.libs@meta.data$predicted.celltype.l1,
+                    l2 = pbmc.libs@meta.data$predicted.celltype.l2) %>% 
+  distinct(l2, .keep_all= T)
+remove_cells <- rownames(check.meta)
+```
+
+```{r, fig.dim = c(10,8)}
+DimPlot(pbmc.libs,group.by = "HTO_classification", reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Donorid",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Group",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "orig.ident",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend()
+#ggsave("ARNtPhe_vs_healthy_umap_celltypes_newnorm.png", dpi = 300, width = 30, height = 20, units = "cm")
+
+DimPlot(pbmc.libs, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_nosplit.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend() + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+
+DimPlot(pbmc.libs, reduction = "umap", label = F, split.by = "Group", group.by = "predicted.celltype.l2") + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_legends.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l1") + NoLegend() + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_upperlevel_annotation.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+
+DimPlot(pbmc.libs, reduction = "umap", label = F, split.by = "Group", group.by = "predicted.celltype.l1") + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_legends_upperlevel_annotation.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+pbmc_nona <- pbmc.libs[,!colnames(pbmc.libs) %in% remove_cells]
+
+DimPlot(pbmc_nona, reduction = "umap", label = F, split.by = "Group", group.by = "manual.celltype.l1.l2") + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_legends_manual_annotation.pdf", dpi = 300, width = 35, height = 20, units = "cm")
+
+DimPlot(pbmc_nona, reduction = "umap", label = F, group.by = "manual.celltype.l1.l2") + ggtitle("Healthy vs ARNt-Phe celltypes")
+ggsave("ARNt-Phe_vs_healthy_umap_celltypes_nosplit_manual_annotation.pdf", dpi = 300, width = 30, height = 20, units = "cm")
+
+
+pbmc.libs@meta.data <- pbmc.libs@meta.data %>% 
+  mutate(d_h = case_when(
+    grepl(sample_id_johan, pattern = "disease") ~ "disease",
+    .default = "healthy"
+  ))
+
+pbmc.libs_disease <- subset(pbmc.libs, subset = d_h == "disease")
+
+#png(paste0("UMAP_pbmc.libs_disease_", lib_name, ".png"), res = 300, width = 30, height = 12, units = "cm")
+DimPlot(pbmc.libs_disease, 
+        reduction = "umap", 
+        group.by = "predicted.celltype.l2", 
+        split.by = "Donorid", 
+        label = T,
+        label.size = 4,
+        repel = T) +
+  NoLegend()
+#dev.off()
+
+pbmc.libs_healthy <- subset(pbmc.libs, subset = d_h == "healthy")
+
+#png(paste0("UMAP_pbmc.libs_healthy_", lib_name, ".png"), res = 300, width = 30, height = 12, units = "cm")
+DimPlot(pbmc.libs_healthy, 
+        reduction = "umap", 
+        group.by = "predicted.celltype.l2", 
+        split.by = "Donorid", 
+        label = T,
+        label.size = 4,
+        repel = T) +
+  NoLegend()
+#dev.off()
+
+```
+
+# Pseudobulk RNA-seq analysis
+```{r}
+#deseq2
+# aggregate expression
+DefaultAssay(pbmc.libs) <- "RNA"
+Idents(pbmc.libs) <- "Group"
+
+
+
+
+```
+
+```{r}
+# Run DE analysis
+
+up_down_reg_table <- data.frame()
+celltypes = c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM", "CD4 CTL", "B naive")
+
+pseudobulk <- function(celltypes)
+{
+  for(i in 1:length(celltypes))
+  {
+    data <- subset(pbmc.libs, subset = predicted.celltype.l2 == celltypes[i])
+    Idents(data) <- "Group"
+    de_markers <- FindMarkers(data, ident.1 = "Healthy", ident.2 = "ARNt-Phe", test.use = "MAST")
+
+    padj_cutoff <- 0.1
+
+    # Subset the significant results
+    sig_res <- dplyr::filter(de_markers, p_val_adj < padj_cutoff) %>%
+      dplyr::arrange(p_val_adj)
+    
+    total_up <- nrow(filter(sig_res, avg_log2FC >= 0))
+    total_down <- nrow(filter(sig_res, avg_log2FC < 0))
+    
+    up_down_reg_table[i,1] <- celltypes[i]
+    up_down_reg_table[i,2] <- total_up
+    up_down_reg_table[i,3] <- total_down
+  }
+  colnames(up_down_reg_table) <- c("celltype", "up", "down")
+  up_down_reg_table_long <- pivot_longer(data = up_down_reg_table,
+                                         cols = c("up", "down"),
+                                         names_to = "Regulation",
+                                         values_to = "Genes")
+  
+  
+  return(up_down_reg_table_long)
+}
+
+tab <- pseudobulk(celltypes = celltypes)
+
+ggplot(tab, aes(celltype, Genes, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.5) +
+  theme_bw()
+
+```
+
+
+```{r, warning=F}
+# Heatmap
+
+pseudobulk_heatmap <- function(celltype)
+{
+  data <- subset(pbmc.libs, subset = predicted.celltype.l2 == celltype)
+    Idents(data) <- "Group"
+    de_markers <- FindMarkers(data, ident.1 = "Healthy", ident.2 = "ARNt-Phe", test.use = "MAST")
+
+    padj_cutoff <- 0.1
+
+    # Subset the significant results
+    sig_res <- dplyr::filter(de_markers, p_val_adj < padj_cutoff) %>%
+      dplyr::arrange(p_val_adj)
+    
+    up_table <- filter(sig_res, avg_log2FC >= 0)
+    down_table <- filter(sig_res, avg_log2FC < 0)
+    
+    return(list(sig_res, up_table, down_table))
+}
+
+mitogenes <- read_excel("../Human.MitoCarta3.0.xls", 
+     sheet = "A Human MitoCarta3.0")
+
+mitogenes <- mitogenes %>% pull(Symbol)
+```
+
+## CD14 Monocytes
+```{r}
+
+cd14 <- pseudobulk_heatmap(celltype = "CD14 Mono")
+
+DT::datatable(cd14[[1]])
+
+DT::datatable(cd14[[2]])
+
+sig_res_cd14 <- cd14[[1]] %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(p_val_adj <= 0.1) %>% 
+  filter(abs(avg_log2FC) > 0.5) %>% 
+  # filter(Symbol %in% mitogenes)
+  arrange(avg_log2FC)
+
+cd14.libs <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD1_l2"))
+cd14.libs <- subset(cd14.libs, subset = Donorid %in% c("D03", "H03"))
+cd14.libs <- subset(cd14.libs, subset = predicted.celltype.l2 == "CD14 Mono")
+# normalise
+cd14.libs <- NormalizeData(cd14.libs, normalization.method = "LogNormalize", scale.factor = 10000)
+cd14.libs <- FindVariableFeatures(cd14.libs, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(cd14.libs)
+cd14.libs <- ScaleData(cd14.libs, features = all.genes)
+
+pbmc.libs.cd14 <- subset(pbmc.libs, subset = predicted.celltype.l2 == "CD14 Mono")
+
+expr_mat <- pbmc.libs.cd14[["RNA"]]@counts %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(Symbol %in% sig_res_cd14$Symbol) %>% 
+  left_join(data.frame(Symbol = sig_res_cd14$Symbol), .) %>% 
+  column_to_rownames("Symbol")
+
+annot_col <- pbmc.libs.cd14@meta.data %>% 
+  rownames_to_column("Cell") %>% 
+  as.data.frame() %>% 
+  filter(Cell %in% colnames(expr_mat)) %>% 
+  column_to_rownames("Cell") %>% 
+  select(Group, age) 
+
+expr_mat_ <- expr_mat %>% 
+  rownames_to_column("Symbol") %>% 
+  mutate(status = case_when(
+    Symbol %in% mitogenes ~ "mito",
+    .default = ""
+  )) %>% 
+  mutate(colors = case_when(
+    Symbol %in% mitogenes ~ "red",
+    .default = "black"
+  )) %>% 
+  column_to_rownames("Symbol")
+  
+
+heat_colors <- rev(brewer.pal(11, "PuOr"))
+
+pdf("ARNt-Phe_vs_healthy_heatmap_CD14.pdf")
+pheatmap(expr_mat,
+         color = heat_colors,
+         cluster_rows = F,
+         cluster_cols = T,
+         show_rownames = TRUE,
+         show_colnames = F,
+         annotation_col = annot_col,
+         border_color = NA,
+         fontsize = 7,
+         scale = "row",
+         fontsize_row = 4,
+         # cellheight = 10,
+         # cellwidth = 20,
+         treeheight_row = 0
+         )
+
+cols=expr_mat_[order(match(rownames(expr_mat_), p$gtable$grobs[[5]]$label)), ]$colors
+p$gtable$grobs[[5]]$gp=gpar(col=cols)
+# leg <- legendGrob(c("Exp1", "Exp2"), nrow = 2, pch = 15, gp = gpar(fontsize = 10, col = c("black", "red")))
+hm2 <- arrangeGrob(p$gtable)
+grid.draw(hm2)
+dev.off()
+p
+
+top10 <- cd14[[1]] %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(p_val_adj <= 0.1) %>% 
+  filter(abs(avg_log2FC) > 0.5) %>% 
+  # filter(Symbol %in% mitogenes)
+  arrange(avg_log2FC)
+pdf("ARNt-Phe_vs_healthy_heatmap_CD14.pdf")
+DoHeatmap(cd14.libs, features = top10$Symbol, size = 4, angle = 0, group.by = "Group") +     scale_fill_gradientn(colors = rev(brewer.pal(11, "PuOr"))) 
+dev.off()
+
+cd14.mito <- cd14[[1]] %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(p_val_adj <= 0.1) %>% 
+  filter(abs(avg_log2FC) > 0.5) %>% 
+  filter(Symbol %in% mitogenes) %>% 
+  arrange(avg_log2FC)
+
+```
+
+## CD16 Monocytes
+
+```{r}
+
+cd16 <- pseudobulk_heatmap(celltype = "CD16 Mono")
+
+DT::datatable(cd16[[1]])
+
+DT::datatable(cd16[[2]])
+
+```
+
+
+## NK cells
+
+```{r}
+
+nk <- pseudobulk_heatmap(celltype = "NK")
+
+DT::datatable(nk[[1]])
+
+DT::datatable(nk[[2]])
+
+nk.libs <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD1_l2"))
+nk.libs <- subset(nk.libs, subset = Donorid %in% c("D03", "H03"))
+nk.libs <- subset(nk.libs, subset = predicted.celltype.l2 == "NK")
+# normalise
+nk.libs <- NormalizeData(nk.libs, normalization.method = "LogNormalize", scale.factor = 10000)
+nk.libs <- FindVariableFeatures(nk.libs, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(nk.libs)
+nk.libs <- ScaleData(nk.libs, features = all.genes)
+
+
+top10 <- nk[[1]] %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(p_val_adj <= 0.1) %>% 
+  filter(abs(avg_log2FC) > 0.5) %>% 
+  # filter(Symbol %in% mitogenes)
+  arrange(avg_log2FC)
+pdf("ARNt-Phe_vs_healthy_heatmap_NK.pdf")
+DoHeatmap(nk.libs, features = top10$Symbol, size = 4, angle = 0, group.by = "Group") +     scale_fill_gradientn(colors = rev(brewer.pal(11, "PuOr"))) 
+dev.off()
+
+nk.mito <-  nk[[1]] %>% 
+  rownames_to_column("Symbol") %>% 
+  filter(p_val_adj <= 0.1) %>% 
+  filter(abs(avg_log2FC) > 0.5) %>% 
+  filter(Symbol %in% mitogenes) %>% 
+  arrange(avg_log2FC)
+
+```
+
+## CD4 TCM
+
+```{r}
+
+cd4tcm <- pseudobulk_heatmap(celltype = "CD4 TCM")
+
+DT::datatable(cd4tcm[[1]])
+
+DT::datatable(cd4tcm[[2]])
+
+```
+
+# Celltype percent
+```{r}
+celltype.percent <- pbmc.libs@meta.data %>%
+  group_by(Donorid, predicted.celltype.l2) %>%
+  summarise(count = n()) %>%
+  mutate(celltype.percent = round(count / sum(count), 3)) %>% 
+  mutate(Donor = Donorid) %>% 
+  separate(Donorid, c("group", "index"), sep = "0")
+
+celltype.percent %>% 
+  filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+ggplot(aes(x = predicted.celltype.l2, y = celltype.percent, 
+           fill = factor(group), 
+           colour = factor(group))) + #  colour = group, 
+  geom_point(size = 4, aes(shape = index), alpha = 0.6, position = position_jitterdodge(jitter.width=0.3)) + #position_jitterdodge(dodge.width=0.3)
+  #geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  #facet_grid(index ~ orig.ident, scale = "free_x", ) +
+  scale_y_log10() +
+  theme_bw() +
+   theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+             strip.text = element_text(size = 14)) +
+   theme(axis.text = element_text(size = 9),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank()) 
+  # stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+  #                geom = "crossbar", width = 0.5, position = position_jitterdodge(jitter.width=0.3))
+
+celltype.percent %>% 
+  #filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+ggplot(aes(x = predicted.celltype.l2, y = celltype.percent, 
+           fill = factor(group), 
+           colour = factor(group), 
+           #,group = group
+           )) + #  colour = group, 
+  geom_point(size = 2, aes(shape = index), alpha = 0.6, position = position_jitterdodge(jitter.width=0.3)) + #position_jitterdodge(dodge.width=0.3)
+  #geom_boxplot(alpha = 0.5, outlier.shape = NA) + #, aes(fill = predicted.celltype.l2)
+  #facet_grid(index ~ orig.ident, scale = "free_x", ) +
+  scale_y_log10() +
+  theme_bw() +
+   # theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+   #           strip.text = element_text(size = 14)) +
+   theme(axis.text = element_text(size = 9),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank())
+  # stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+  #                geom = "crossbar", width = 0.5, position = position_jitterdodge(jitter.width=0.3))
+```
+
+# MT gene expression
+
+```{r}
+# MT gene expression
+
+mito.genes.df <- pbmc.libs@meta.data %>%
+  group_by(Donorid, predicted.celltype.l2) %>%
+  summarise(across(starts_with("rna_MT-"), ~ median(.), .names = "mean_{.col}"))
+#`summarise()` has grouped output by 'Donorid'. You can override using the `.groups` argument.
+
+mito.genes <- mito.genes.df %>%
+  pivot_longer(
+    cols = starts_with("mean_rna_MT-"),
+    names_to = "Mitochondrial.gene",
+    values_to = "Mean.Expression"
+  ) %>%
+  mutate(Mitochondrial.gene = gsub("mean_rna_", "", Mitochondrial.gene)) %>%
+  mutate(log2.Mean.Expression = -log2(Mean.Expression))
+
+# mito.genes.box <- pbmc.libs@meta.data %>%
+#       pivot_longer(
+#      cols = starts_with("rna_MT-"),
+#      names_to = "Mitochondrial.gene",
+#      values_to = "Expression"
+#    ) %>%
+#    mutate(Mitochondrial.gene = gsub("rna_", "", Mitochondrial.gene))
+
+mito.genes.dh <- mito.genes %>% 
+  mutate(Donor = Donorid) %>% 
+  separate(Donorid, c("group", "index"), sep = "0")
+
+
+  mito.genes.dh %>% 
+  filter(predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK", "CD4 TCM")) %>% 
+
+  ggplot(aes(x = Mitochondrial.gene, y = Mean.Expression,
+             fill = factor(group), 
+           colour = factor(group)
+           )) + #  colour = group, 
+  geom_point(size = 3, aes(shape = index), alpha = 0.7, position=position_jitterdodge(jitter.width=0.2)) +
+  #geom_boxplot(outlier.shape = NA,alpha = 0.5) +
+  facet_wrap(~ predicted.celltype.l2) +
+  scale_y_log10() +
+  theme_bw() +
+   theme(strip.background =element_rect(fill="aliceblue", colour = "white"),
+             strip.text.x = element_text(size = 11)) +
+   theme(axis.text = element_text(size = 8),
+         axis.text.x = element_text(angle = 45, hjust = 1),
+         panel.grid.minor = element_blank()) 
+
+```
+
+# Scoring modules based on Mitocarta
+
+```{r, fig.dim = c(10,8)}
+mitogenes <- read_excel("../Human.MitoCarta3.0.xls", 
+     sheet = "A Human MitoCarta3.0")
+
+mitogenes <- mitogenes %>% pull(Symbol)
+
+available_genes <- intersect(rownames(pbmc.libs), mitogenes)
+  
+#Is your genes.list input a vector of gene names? If yes, then you'll get an independent score for each gene. To get a single score, your input should be a list of a character vector of gene names.
+
+ModScore <- AddModuleScore(
+    #pbmc_nona,
+  pbmc.libs,
+  features = list(available_genes),
+  pool = NULL,
+  nbin = 24,
+  ctrl = 100,
+  k = FALSE,
+  assay = "RNA",
+  seed = 1,
+  search = FALSE,
+)
+Idents(ModScore) <- c("predicted.celltype.l2")
+ModScore.plot <- subset(ModScore, subset = predicted.celltype.l2 %in% c("CD14 Mono", "CD16 Mono", "NK"))
+
+FeaturePlot(
+  ModScore.plot,
+  features = 'Cluster1',
+  dims = c(1, 2),
+  cells = NULL,
+  cols = rev(brewer.pal(n = 11, name = "RdBu")),
+  pt.size = NULL,
+  order = FALSE,
+  min.cutoff = NA,
+  max.cutoff = NA,
+  reduction = NULL,
+  split.by = "Group",
+  keep.scale = NULL,
+  shape.by = NULL,
+  slot = "data",
+  blend = FALSE,
+  blend.threshold = 0.5,
+  label = TRUE,
+  label.size = 3,
+  label.color = "black",
+  repel = F,
+  ncol = 2,
+  coord.fixed = FALSE,
+  by.col = TRUE,
+  sort.cell = NULL,
+  interactive = FALSE,
+  combine = TRUE,
+  raster = NULL,
+  raster.dpi = c(512, 512)
+) & theme(legend.position = c(0.05,0.2))
+ggsave("ARNt-Phe_vs_healthy_ModuleScore_Mitocarta_CD14_CD16_NK.pdf", width = 8, height = 5)
+
+
+
+ModScore_healthy = subset(ModScore, subset = Group == "Healthy")
+FeaturePlot(ModScore_healthy,
+            features = 'Cluster1', label = TRUE, repel = TRUE) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_healthy")
+
+ModScore_mtTL1 = subset(ModScore, subset = Group == "ARNt-Phe")
+FeaturePlot(ModScore_mtTL1,
+            features = 'Cluster1', label = TRUE, repel = TRUE) +
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu"))) +
+  ggtitle("ModScore_ARNt-Phe")
+
+```
