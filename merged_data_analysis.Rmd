@@ -1,0 +1,294 @@
+---
+title: "Merged dataset - MITD"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+  pdf_document: default
+  toc: TRUE
+---
+
+```{r}
+ knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(broom)
+library(stringr)
+library(ggplot2)
+library(SeuratData)
+#library(celldex)
+#install.packages("cowplot")
+library(cowplot)
+#devtools::install_github('cole-trapnell-lab/monocle3')
+library(monocle3)
+#remotes::install_github('satijalab/seurat-wrappers')
+library(SeuratWrappers)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(data.table)
+library(Azimuth)
+# mulattoes::install('multtest')
+# install.packages('metap')
+#library(metap)
+#remotes::install_github("satijalab/seurat-data")
+```
+
+```{r}
+# get data sets
+
+# Load the PBMC dataset
+data_MITD1_l1 <- Read10X(data.dir = paste0("../counts/MITD1_l1/filtered_feature_bc_matrix/"))
+gex_MITD1_l1 <- data_MITD1_l1[[1]]
+MITD1_l1 <- CreateSeuratObject(counts = gex_MITD1_l1, project = "MITD1_l1", min.cells = 3, min.features = 200)
+rm(data_MITD1_l1, gex_MITD1_l1)
+
+data_MITD1_l2 <- Read10X(data.dir = paste0("../counts/MITD1_l2/filtered_feature_bc_matrix/"))
+gex_MITD1_l2 <- data_MITD1_l2[[1]]
+MITD1_l2 <- CreateSeuratObject(counts = gex_MITD1_l2, project = "MITD1_l2", min.cells = 3, min.features = 200)
+rm(data_MITD1_l2, gex_MITD1_l2)
+
+data_MITD2_l4 <- Read10X(data.dir = paste0("../counts/MITD2_l4/filtered_feature_bc_matrix/"))
+gex_MITD2_l4 <- data_MITD2_l4[[1]]
+MITD2_l4 <- CreateSeuratObject(counts = gex_MITD2_l4, project = "MITD2_l4", min.cells = 3, min.features = 200)
+rm(data_MITD2_l4, gex_MITD2_l4)
+
+# merge
+pbmc.combined <- merge(MITD1_l1, y = c(MITD1_l2, MITD2_l4), add.cell.ids = c("1_l1", "1_l2", "2_l4"), project = "MITD")
+pbmc.combined
+saveRDS(pbmc.combined, "pbmc.combined.from.rawcounts_l1_l2_l4.rds")
+```
+
+```{r}
+# QC
+MITD1_l1_modified <- readRDS(list.files(pattern = "^pbmc_MITD1_l1.*\\.rds$"))
+MITD1_l2_modified <- readRDS(list.files(pattern = "^pbmc_MITD1_l2.*\\.rds$"))
+MITD2_l4_modified <- readRDS(list.files(pattern = "^pbmc_MITD2_l4.*\\.rds$"))
+
+MITD1_l1_meta <- MITD1_l1_modified@meta.data %>% 
+  select(-c(starts_with("rna_"), is.dead)) 
+rownames(MITD1_l1_meta) <- paste("1_l1_", rownames(MITD1_l1_meta), sep = "")
+MITD1_l2_meta <- MITD1_l2_modified@meta.data %>% 
+  select(-starts_with("rna_"))
+rownames(MITD1_l2_meta) <- paste("1_l2_", rownames(MITD1_l2_meta), sep = "")
+MITD2_l4_meta <- MITD2_l4_modified@meta.data %>% 
+  select(-starts_with("rna_"))
+rownames(MITD2_l4_meta) <- paste("2_l4_", rownames(MITD2_l4_meta), sep = "")
+
+meta <- rbind(MITD1_l1_meta,
+              MITD1_l2_meta,
+              MITD2_l4_meta) %>% 
+  rownames_to_column("cell")
+
+# get live cells from each lib
+live_l1 <- paste("1_l1_", colnames(MITD1_l1_modified), sep = "")
+live_l2 <- paste("1_l2_", colnames(MITD1_l2_modified), sep = "")
+live_l4 <- paste("2_l4_", colnames(MITD2_l4_modified), sep = "")
+live_cells <- c(live_l1, live_l2, live_l4)
+
+# keep live cells
+pbmc.cells <- subset(pbmc.combined, cells = live_cells)
+pbmc.cells@meta.data <- pbmc.cells@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  left_join(., meta) %>% 
+  column_to_rownames("cell")
+#saveRDS(pbmc.cells, "pbmc.cells.livecells_l1_l2_l4.rds")
+saveRDS(pbmc.cells, "pbmc.cells.livecells.metadata_l1_l2_l4.rds")
+```
+
+```{r}
+#grep("^MT-",rownames(mono@assays$RNA@counts),value = TRUE)
+
+pbmc.cells[["percent.mt"]] <- PercentageFeatureSet(pbmc.cells, pattern = "^MT-")
+#head(mono$percent.mt)
+
+# add % of all MT genes
+
+mt.genes <- rownames(pbmc.cells)[grep(rownames(pbmc.cells), pattern = "^MT-")]
+mt.df <- data.frame()
+for(i in 1:length(mt.genes))
+{
+  mt.df[1:ncol(pbmc.cells),i] <- PercentageFeatureSet(pbmc.cells, pattern = mt.genes[i])
+  colnames(mt.df)[i] <- paste0("rna_",mt.genes[i], collapse = '')
+}
+
+pbmc.cells@meta.data <- pbmc.cells@meta.data %>% 
+  cbind(., mt.df)
+```
+
+```{r}
+# normalisation
+pbmc.cells <- NormalizeData(pbmc.cells, normalization.method = "LogNormalize", scale.factor = 10000)
+pbmc.cells <- FindVariableFeatures(pbmc.cells, selection.method = "vst", nfeatures = 2000)
+```
+
+```{r}
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(pbmc.cells), 10)
+top10
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(pbmc.cells)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+
+plot2
+
+all.genes <- rownames(pbmc.cells)
+pbmc.cells <- ScaleData(pbmc.cells, features = all.genes)
+
+```
+
+```{r}
+#dim red
+pbmc.cells <- RunPCA(pbmc.cells, features = VariableFeatures(object = pbmc.cells))
+#DimPlot(pbmc,reduction="pca")
+#DimPlot(pbmc,reduction="pca", group.by = "largest_gene", label = TRUE, label.size = 3)# + NoLegend()
+#DimPlot(pbmc,reduction="pca", dims=c(3,4))
+# Examine and visualize PCA results a few different ways
+print(pbmc.cells[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(pbmc.cells, dims = 1:2, reduction = "pca")
+
+pbmc.cells <- JackStraw(pbmc.cells, num.replicate = 70)
+pbmc.cells <- ScoreJackStraw(pbmc.cells, dims = 1:20)
+
+# The JackStrawPlot() function provides a visualization tool for comparing the distribution of p-values for each PC with a uniform distribution (dashed line). ‘Significant’ PCs will show a strong enrichment of features with low p-values (solid curve above the dashed line). In this case it appears that there is a sharp drop-off in significance after the first 10-12 PCs.
+
+JackStrawPlot(pbmc.cells, dims = 1:20)
+
+ElbowPlot(pbmc.cells)
+
+dims_to_use = 20
+
+DimHeatmap(pbmc.cells, dims = 1, cells = 1000, balanced = TRUE)
+
+DimHeatmap(pbmc.cells, dims = 2:5, cells = 1000, balanced = TRUE)
+
+8482 -> saved.seed
+set.seed(saved.seed)
+
+RunTSNE(
+  pbmc.cells,
+  dims=1:dims_to_use,
+  seed.use = saved.seed, 
+  perplexity=20
+) -> pbmc.cells
+
+DimPlot(pbmc.cells, group.by = "HTO_classification", reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 20")
+
+RunTSNE(
+  pbmc.cells,
+  dims=1:dims_to_use,
+  seed.use = saved.seed,
+  pexplexity = 70
+) -> pbmc.cells
+
+DimPlot(pbmc.cells,group.by = "HTO_classification",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.cells,group.by = "Donorid",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+DimPlot(pbmc.cells,group.by = "Group",reduction = "tsne", pt.size = 1) + ggtitle("tSNE with Perplexity 70")
+
+pbmc.cells <- FindNeighbors(pbmc.cells, dims = 1:dims_to_use)
+pbmc.cells@graphs$RNA_snn[1:20,1:20]
+
+pbmc.cells <- FindClusters(pbmc.cells, resolution = 0.9)
+pbmc.cells <- RunUMAP(pbmc.cells, dims = 1:dims_to_use)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+saveRDS(pbmc.cells, "pbmc.cells.all.processing.uptoUMAP_l1_l2_l4.rds")
+```
+
+```{r}
+pbmc.libs <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD2_l4"))
+pbmc.libs <- subset(pbmc.libs, subset = Donorid %in% c("D01", "D02", "H01", "H02",
+                                                       "D05", "D06", "H05", "H06"))
+
+DimPlot(pbmc.libs,group.by = "HTO_classification", reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Donorid",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "Group",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, group.by = "orig.ident",reduction = "umap", label = "F")
+DimPlot(pbmc.libs, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend()
+ggsave("MELAS_vs_healthy_umap_celltypes.png", dpi = 300, width = 30, height = 20, units = "cm")
+
+```
+
+```{r}
+pbmc.tPhe <- subset(pbmc.cells, subset = orig.ident %in% c("MITD1_l1", "MITD1_l2"))
+pbmc.tPhe <- subset(pbmc.tPhe, subset = Donorid %in% c("D03","H03"))
+
+DimPlot(pbmc.tPhe,group.by = "HTO_classification", reduction = "umap", label = "F")
+DimPlot(pbmc.tPhe, group.by = "Donorid",reduction = "umap", label = "F")
+DimPlot(pbmc.tPhe, group.by = "Group",reduction = "umap", label = "F")
+DimPlot(pbmc.tPhe, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+DimPlot(pbmc.tPhe, group.by = "orig.ident",reduction = "umap", label = "F")
+DimPlot(pbmc.tPhe, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend()
+ggsave("ARNtPhe_vs_healthy_umap_celltypes.png", dpi = 300, width = 30, height = 20, units = "cm")
+```
+
+```{r}
+pbmc.nd5 <- subset(pbmc.cells, subset = orig.ident == "MITD2_l4")
+pbmc.nd5 <- subset(pbmc.nd5, subset = Donorid %in% c("D04","H04"))
+
+DimPlot(pbmc.nd5,group.by = "HTO_classification", reduction = "umap", label = "F")
+DimPlot(pbmc.nd5, group.by = "Donorid",reduction = "umap", label = "F")
+DimPlot(pbmc.nd5, group.by = "Group",reduction = "umap", label = "F")
+DimPlot(pbmc.nd5, group.by = "predicted.celltype.l2",reduction = "umap", label = "F")
+DimPlot(pbmc.nd5, group.by = "orig.ident",reduction = "umap", label = "F")
+DimPlot(pbmc.nd5, reduction = "umap", label = "T", label.size = 4, repel = T, split.by = "Group", group.by = "predicted.celltype.l2") + NoLegend()
+ggsave("mtND5_vs_healthy_umap_celltypes.png", dpi = 300, width = 30, height = 20, units = "cm")
+```
+
+```{r}
+pbmc.markers <- Seurat::FindAllMarkers(pbmc.libs, only.pos = F, min.pct = 0.25, logfc.threshold = 0.25)
+pbmc.markers.top2 <- pbmc.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 10, order_by = avg_log2FC)
+pbmc.markers.top2
+
+VlnPlot(pbmc.libs, features = c("CD14", "FCGR3A"))
+set.seed(123)
+#FeaturePlot(pbmc, features = sample(pbmc.markers.top2$gene, 9))
+FeaturePlot(pbmc.libs, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP",
+    "CD8A"))
+
+pbmc.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(pbmc.libs, features = top10$gene) + NoLegend() + theme(text = element_text(size = 5))
+
+pbmc.libs %>% DotPlot(
+  .,
+  assay = "RNA",
+  features = unique(top10$gene),
+  cols = c("lightgrey", "blue"),
+  col.min = -2.5,
+  col.max = 2.5,
+  dot.min = 0,
+  dot.scale = 2.5,
+  idents = NULL,
+  group.by = NULL,
+  split.by = NULL,
+  cluster.idents = FALSE,
+  scale = TRUE,
+  scale.by = "radius",
+  scale.min = NA,
+  scale.max = NA
+)
+```
+
+```{r}
+#annotation
+pbmc.cells.annot <- RunAzimuth(pbmc.cells, reference = "pbmcref")
+
+```
